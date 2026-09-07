@@ -1,0 +1,13 @@
+# Java
+*.class
+*.log
+
+# Build
+build/
+
+# EEPROM
+*.eeprom
+
+# Temp
+/tmp/
+*.out
