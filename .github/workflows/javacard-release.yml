@@ -1,0 +1,102 @@
+name: Java Card Release
+
+# Déclenchement : uniquement lorsqu'un tag commençant par "v" est poussé (ex: v1.0, v1.2.3)
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Permissions minimales nécessaires
+permissions:
+  contents: write   # Requis pour créer une Release et y attacher des fichiers
+
+jobs:
+  # ============================================================
+  # JOB 1 : Compilation et tests (vérification préalable)
+  # ============================================================
+  build-and-test:
+    name: Build et tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Installation des dépendances système
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-multilib libpcsclite1 pcsc-tools wget unzip
+
+      - name: Configuration de Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configuration de JC_HOME (JCDK embarqué dans le dépôt)
+        run: |
+          echo "JC_HOME=$PWD/tools/jcdk" >> $GITHUB_ENV
+          echo "PATH=$PWD/tools/jcdk/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Téléchargement d'ECJ (compilateur Java Eclipse)
+        run: |
+          mkdir -p lib
+          wget -O lib/ecj.jar https://repo.maven.apache.org/maven2/org/eclipse/jdt/ecj/3.33.0/ecj-3.33.0.jar
+
+      - name: Compilation du CAP
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
+
+      - name: Exécution des tests
+        run: |
+          chmod +x scripts/run_tests.sh
+          ./scripts/run_tests.sh
+
+      # On conserve le .cap comme artefact pour le job suivant
+      - name: Upload du .cap en artefact temporaire
+        uses: actions/upload-artifact@v4
+        with:
+          name: javacard-cap
+          path: |
+            **/*.cap
+            build/**/*.cap
+          if-no-files-found: error
+          retention-days: 1
+
+  # ============================================================
+  # JOB 2 : Création de la Release GitHub avec le .cap en pièce jointe
+  # ============================================================
+  release:
+    name: Publication de la Release
+    runs-on: ubuntu-latest
+    needs: build-and-test   # Ne démarre que si build-and-test réussit
+
+    steps:
+      - name: Checkout du code (pour accéder au CHANGELOG et aux métadonnées)
+        uses: actions/checkout@v4
+
+      - name: Téléchargement du .cap depuis l'artefact du job précédent
+        uses: actions/download-artifact@v4
+        with:
+          name: javacard-cap
+          path: ./release-artifacts
+
+      - name: Affichage des fichiers à publier (debug)
+        run: |
+          echo "=== Contenu du dossier d'artefacts ==="
+          ls -la ./release-artifacts/
+          find ./release-artifacts -name "*.cap" -exec ls -lh {} \;
+
+      - name: Création de la Release GitHub avec le .cap
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Release ${{ github.ref_name }}"
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true   # GitHub génère automatiquement les notes (commits, PRs)
+          files: |
+            ./release-artifacts/**/*.cap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
